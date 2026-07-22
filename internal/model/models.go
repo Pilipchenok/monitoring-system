@@ -14,3 +14,8 @@ type Metric struct {
 	Name string
 	Value float32
 }
+
+type Alert struct {
+	Message string
+	MetricToAlert Metric
+}

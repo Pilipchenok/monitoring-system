@@ -1,0 +1,3 @@
+send_interval: -3s
+host_name: ""
+collector_url: ""

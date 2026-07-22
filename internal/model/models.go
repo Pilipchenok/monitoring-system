@@ -5,17 +5,20 @@ import (
 )
 
 type ServerMetrics struct {
-	Name string
+	Hostname string
 	CheckTime time.Time
 	Metrics []Metric
 }
 
 type Metric struct {
 	Name string
-	Value float32
+	Value float64
 }
 
 type Alert struct {
-	Message string
-	MetricToAlert Metric
+	Hostname string
+	MetricName string
+	Value float64
+	Threshold float64
+	AlertTime time.Time
 }

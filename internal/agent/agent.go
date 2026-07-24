@@ -36,12 +36,11 @@ func SendMetrics(sm model.ServerMetrics, collectorURL string) error {
 
 	resp, err := httpClient.Post(collectorURL + "/api/metrics", "application/json", bytes.NewBuffer(jsonMetrics))
 	if err != nil {
-    log.Printf("send error: %v", err)
     return err
 	}
 	if resp.StatusCode != http.StatusOK {
-			log.Printf("collector returned status %d", resp.StatusCode)
-			return fmt.Errorf("bad status: %d", resp.StatusCode)
+		log.Printf("collector returned status %d", resp.StatusCode)
+		return fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 	return nil

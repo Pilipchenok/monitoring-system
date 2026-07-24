@@ -11,6 +11,10 @@ import (
 	"monitoring-system/internal/model"
 )
 
+var httpClient = &http.Client {
+	Timeout: 5 * time.Second,
+}
+
 func TakeMetrics(hostname string) (model.ServerMetrics, error) {
 	metrics := model.ServerMetrics {
     Hostname:  hostname,
@@ -30,9 +34,6 @@ func SendMetrics(sm model.ServerMetrics, collectorURL string) error {
 		return err
 	}
 
-	var httpClient = &http.Client {
-    Timeout: 5 * time.Second,
-	}
 	resp, err := httpClient.Post(collectorURL + "/api/metrics", "application/json", bytes.NewBuffer(jsonMetrics))
 	if err != nil {
     log.Printf("send error: %v", err)

@@ -1,0 +1,3 @@
+send_interval: 5s
+host_name: backend1
+collector_url:

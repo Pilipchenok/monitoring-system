@@ -45,11 +45,15 @@ func LoadAgent(path string) (*AgentConfig, error) {
 
 	var aConf AgentConfig
 	err = yaml.Unmarshal(data, &aConf)
+	if aConf.Hostname == "" {
+		aConf.Hostname, _ = os.Hostname()
+	}
+
 	if err != nil {
 		return nil, err
 	}
 
-	if aConf.SendInterval <= 0 || aConf.CollectorURL == "" || aConf.Hostname == "" {
+	if aConf.SendInterval <= 0 || aConf.CollectorURL == "" {
 		return nil, errors.New("Invalid data")
 	}
 	return &aConf, nil

@@ -16,10 +16,14 @@ func NewRepository(db *sql.DB) *Repository {
 	return &Repository{db: db}
 }
 
-func (r *Repository) SaveMetrics(ctx context.Context, hostname string, metrics model.ServerMetrics) error {
+func (r *Repository) SaveMetrics(ctx context.Context, metrics model.ServerMetrics) error {
 
 	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
 	defer tx.Rollback()
+	var hostID int
 
 	reqID := `INSERT INTO hosts (hostname, last_seen)
 		VALUES ($1, $2)
@@ -30,21 +34,19 @@ func (r *Repository) SaveMetrics(ctx context.Context, hostname string, metrics m
 	reqInsert := `INSERT INTO metrics (host_id, name, value, recorded_at)
 		VALUES ($1, $2, $3, $4)`
 
-	db.BeginTx(
-		hostID, err := db.ExecContext(ctx, reqID, metrics.Hostname, time.Now())
+	row := tx.QueryRowContext(ctx, reqID, metrics.Hostname, time.Now())
+	err = row.Scan(&hostID)
+	if err != nil {
+			return err
+	}
+	for i := 0; i < len(metrics.Metrics); i++ {
+		_, err = tx.ExecContext(
+			ctx, reqInsert, hostID,
+			metrics.Metrics[i].Name, metrics.Metrics[i].Value, time.Now(),
+		)
 		if err != nil {
 			return err
 		}
-		for i := 0; i < len(metrics.Metrics); i++ {
-			_, err = db.ExecContext(
-				ctx, reqInsert, hostID,
-				metrics.Metrics[i].Name, metrics.Metrics[i].Value, time.Now(),
-			)
-			if err != nil {
-				return err
-			}
-		}
-	)
-
-	return nil
+	}
+	return tx.Commit()
 }

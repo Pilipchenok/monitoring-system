@@ -20,7 +20,7 @@ func NewHandler(service ServiceStorage) *Handler {
 	return &Handler{service: service}
 }
 
-func (h *Handler) AgentHandler(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return

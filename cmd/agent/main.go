@@ -7,6 +7,7 @@ import (
 	"syscall"
 	"time"
 	"context"
+	"sync"
 
 	"monitoring-system/internal/agent"
 	"monitoring-system/internal/config"
@@ -24,7 +25,11 @@ func main() {
 	ticker := time.NewTicker(cfg.SendInterval)
 	defer ticker.Stop()
 
+	var wg sync.WaitGroup
+	wg.Add(1)
+
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-ticker.C:
@@ -47,6 +52,8 @@ func main() {
 	<-quit
 
 	cancel()
+	log.Println("Waiting for agent to stop")
+	wg.Wait()
 
 	log.Println("Agent stopped")
 }

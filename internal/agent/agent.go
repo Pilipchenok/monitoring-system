@@ -38,10 +38,10 @@ func SendMetrics(sm model.ServerMetrics, collectorURL string) error {
 	if err != nil {
     return err
 	}
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("collector returned status %d", resp.StatusCode)
 		return fmt.Errorf("bad status: %d", resp.StatusCode)
 	}
-	defer resp.Body.Close()
 	return nil
 }

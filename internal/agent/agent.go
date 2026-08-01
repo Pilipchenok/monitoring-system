@@ -8,6 +8,11 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/net"
+
 	"monitoring-system/internal/model"
 )
 
@@ -16,13 +21,35 @@ var httpClient = &http.Client {
 }
 
 func TakeMetrics(hostname string) (model.ServerMetrics, error) {
+	var collectedMetrics []model.Metric
+	vMem, err := mem.VirtualMemory()
+	if err != nil {
+		log.Printf("RAM scanning error: %v", err)
+	} else {
+		collectedMetrics = append(collectedMetrics, model.Metric{Name: "RAM", Value: vMem.UsedPercent})
+	}
+	cpuPercents, err := cpu.Percent(0, false)
+	if err != nil || len(cpuPercents) == 0 {
+		log.Printf("CPU scanning error: %v", err)
+	} else {
+		collectedMetrics = append(collectedMetrics, model.Metric{Name: "CPU", Value: cpuPercents[0]})
+	}
+	usage, err := disk.Usage("/")
+	if err != nil {
+		log.Printf("Disk scanning error: %v", err)
+	} else {
+		collectedMetrics = append(collectedMetrics, model.Metric{Name: "DISK", Value: usage.UsedPercent})
+	}
+	connections, err := net.Connections("all")
+	if err != nil {
+		log.Printf("Net scanning error: %v", err)
+	} else {
+		collectedMetrics = append(collectedMetrics, model.Metric{Name: "ActiveConnections", Value: float64(len(connections))})
+	}
 	metrics := model.ServerMetrics {
     Hostname:  hostname,
     CheckTime: time.Now(),
-    Metrics: []model.Metric {
-			{Name: "CPU", Value: 47.7},
-			{Name: "RAM", Value: 53.4},
-    },
+    Metrics: collectedMetrics,
 	}
 	return metrics, nil
 }

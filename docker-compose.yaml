@@ -1,0 +1,28 @@
+version: "3.8"
+
+services:
+  collector:
+    build:
+      context: .
+      dockerfile: Dockerfile.collector
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+  agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    depends_on:
+      - collector
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-monitoring
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: monitoring
+    ports:
+      - "5433:5432"

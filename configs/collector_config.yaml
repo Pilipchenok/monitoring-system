@@ -1,2 +1,2 @@
 port: 8080
-database_url: "postgres://user:pass@localhost:5433/monitoring"
+database_url: "postgres://user:pass@postgres:5432/monitoring?sslmode=disable"

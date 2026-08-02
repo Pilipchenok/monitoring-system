@@ -9,6 +9,7 @@ services:
       - "8080:8080"
     depends_on:
       - postgres
+    restart: always
 
   agent:
     build:
@@ -19,10 +20,12 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: postgres-monitoring
+    container_name: docker-postgres-monitoring
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: pass
       POSTGRES_DB: monitoring
     ports:
       - "5433:5432"
+    volumes:
+      - ./migrations/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql

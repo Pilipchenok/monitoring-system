@@ -17,7 +17,6 @@ func NewRepository(db *sql.DB) *Repository {
 }
 
 func (r *Repository) SaveMetrics(ctx context.Context, metrics model.ServerMetrics) error {
-
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -49,4 +48,11 @@ func (r *Repository) SaveMetrics(ctx context.Context, metrics model.ServerMetric
 		}
 	}
 	return tx.Commit()
+}
+
+func (r *Repository) CleanOldMetrics(ctx context.Context, threshold time.Time) error {
+	reqClean := `DELETE FROM metrics WHERE recorded_at < $1`
+
+	_, err := r.db.ExecContext(ctx, reqClean, threshold)
+	return err
 }

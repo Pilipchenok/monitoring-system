@@ -38,6 +38,26 @@ func main() {
     Handler: myHandler,
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ticker := time.NewTicker(3 * time.Hour)
+	defer ticker.Stop()
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				threshold := time.Now().AddDate(0, 0, -7)
+				err := serv.CleanOldMetrics(ctx, threshold)
+				if err != nil {
+					log.Printf("Cleaning metrics error: %v", err)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
 	go func() {
 		log.Printf("Collector started on :%d", cfg.Port)
 		err := server.ListenAndServe()

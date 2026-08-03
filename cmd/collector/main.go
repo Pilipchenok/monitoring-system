@@ -33,9 +33,15 @@ func main() {
 	rep := repository.NewRepository(sqlDB)
 	serv := service.NewService(rep)
 	myHandler := handler.NewHandler(serv)
+	
+	mux := http.NewServeMux()
+	
+	mux.HandleFunc("POST /api/metrics", myHandler.SaveMetricsHandler)
+	mux.HandleFunc("GET /api/metrics/latest", myHandler.GetMetricsHandler)
+	
 	server := &http.Server{
-    Addr: fmt.Sprintf(":%d", cfg.Port),
-    Handler: myHandler,
+		Addr: fmt.Sprintf(":%d", cfg.Port),
+		Handler: mux,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

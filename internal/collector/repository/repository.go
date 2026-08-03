@@ -56,3 +56,30 @@ func (r *Repository) CleanOldMetrics(ctx context.Context, threshold time.Time) e
 	_, err := r.db.ExecContext(ctx, reqClean, threshold)
 	return err
 }
+
+func (r *Repository) SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error) {
+	reqSelect := `SELECT name, value FROM metrics ORDER BY recorded_at DESC LIMIT $1`
+
+	rows, err := r.db.QueryContext(ctx, reqSelect, count)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var metrics []model.Metric
+	
+	for rows.Next() {
+		var metric model.Metric
+		err = rows.Scan(&metric.Name, &metric.Value)
+		if err != nil {
+			return nil, err
+		}
+		metrics = append(metrics, metric)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return metrics, nil
+}

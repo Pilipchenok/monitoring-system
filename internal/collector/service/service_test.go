@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,8 +11,10 @@ import (
 )
 
 type MockStorage struct {
-	mockSaveErr  error
+	mockSaveErr error
 	mockCleanErr error
+	mockSelectErr error
+	mockSelectData []model.Metric
 }
 
 func (m *MockStorage) SaveMetrics(ctx context.Context, metrics model.ServerMetrics) error {
@@ -22,6 +25,10 @@ func (m *MockStorage) CleanOldMetrics(ctx context.Context, threshold time.Time) 
 	return m.mockCleanErr
 }
 
+func (m *MockStorage) SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error) {
+	return m.mockSelectData, m.mockSelectErr
+}
+
 func TestService_SaveMetrics(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -29,7 +36,7 @@ func TestService_SaveMetrics(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:    "Успешное сохранение метрик",
+			name: "Успешное сохранение метрик",
 			mockErr: nil,
 			wantErr: false,
 		},
@@ -81,6 +88,55 @@ func TestService_CleanOldMetrics(t *testing.T) {
 
 			if (err != nil) != tt.wantErr {
 				t.Errorf("CleanOldMetrics() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestService_SelectLastMetrics(t *testing.T) {
+	tests := []struct {
+		name string
+		count int
+		mockData []model.Metric
+		mockErr error
+		wantErr bool
+	}{
+		{
+			name:  "Успешное получение метрик",
+			count: 2,
+			mockData: []model.Metric{
+				{Name: "CPU", Value: 45.5},
+				{Name: "RAM", Value: 60.2},
+			},
+			mockErr: nil,
+			wantErr: false,
+		},
+		{
+			name:     "Ошибка БД при получении",
+			count:    10,
+			mockData: nil,
+			mockErr:  errors.New("database connection lost"),
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &MockStorage{
+				mockSelectErr:  tt.mockErr,
+				mockSelectData: tt.mockData,
+			}
+			svc := NewService(mock)
+
+			data, err := svc.SelectLastMetrics(context.Background(), tt.count)
+
+			if (err != nil) != tt.wantErr {
+				t.Errorf("SelectLastMetrics() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+
+			if err == nil && !reflect.DeepEqual(data, tt.mockData) {
+				t.Errorf("SelectLastMetrics() got = %v, want %v", data, tt.mockData)
 			}
 		})
 	}

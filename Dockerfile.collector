@@ -15,6 +15,7 @@ WORKDIR /app
 
 COPY --from=builder /collector ./collector
 COPY configs/collector_config.yaml ./configs/collector_config.yaml
+COPY static/ ./static/
 
 EXPOSE 8080
 

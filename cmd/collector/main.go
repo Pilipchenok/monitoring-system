@@ -38,6 +38,9 @@ func main() {
 	
 	mux.HandleFunc("POST /api/metrics", myHandler.SaveMetricsHandler)
 	mux.HandleFunc("GET /api/metrics/latest", myHandler.GetMetricsHandler)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
+    http.ServeFile(w, r, "static/index.html")
+	})
 	
 	server := &http.Server{
 		Addr: fmt.Sprintf(":%d", cfg.Port),

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Monitoring Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f7f6; }
+        .container { max-width: 800px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #333; }
+        canvas { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Мониторинг сервера (Live)</h1>
+        <canvas id="metricsChart" width="400" height="200"></canvas>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('metricsChart').getContext('2d');
+        const metricsChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Значение метрики (%)',
+                    data: [],
+                    backgroundColor: [
+                        'rgba(54, 162, 235, 0.6)',
+                        'rgba(255, 99, 132, 0.6)',
+                        'rgba(255, 206, 86, 0.6)',
+                        'rgba(75, 192, 192, 0.6)'
+                    ],
+                    borderColor: [
+                        'rgba(54, 162, 235, 1)',
+                        'rgba(255, 99, 132, 1)',
+                        'rgba(255, 206, 86, 1)',
+                        'rgba(75, 192, 192, 1)'
+                    ],
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                scales: {
+                    y: { 
+                        beginAtZero: true, 
+                        ticks: {
+                            stepSize: 5
+                        }
+                    }
+                },
+                animation: { duration: 500 }
+            }
+        });
+
+        async function fetchMetrics() {
+            try {
+                const response = await fetch('/api/metrics/latest');
+                if (!response.ok) throw new Error('Ошибка сети');
+                
+                const data = await response.json();
+
+                metricsChart.data.labels = [];
+                metricsChart.data.datasets[0].data = [];
+
+                data.forEach(item => {
+                    const name = item.Name || item.name;
+                    const value = item.Value || item.value;
+                    
+                    if (metricsChart.data.labels.length < 4) {
+                        metricsChart.data.labels.push(name);
+                        metricsChart.data.datasets[0].data.push(value);
+                    }
+                });
+
+                metricsChart.update();
+            } catch (error) {
+                console.error('Ошибка при получении метрик:', error);
+            }
+        }
+
+        fetchMetrics();
+        setInterval(fetchMetrics, 5000);
+    </script>
+</body>
+</html>

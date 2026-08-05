@@ -22,3 +22,8 @@ type Alert struct {
 	Threshold float64
 	AlertTime time.Time
 }
+
+type Host struct {
+	ID       int `json:"id"`
+	Hostname string `json:"hostname"`
+}

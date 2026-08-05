@@ -10,7 +10,8 @@ import (
 type MetricsStorage interface {
 	SaveMetrics(ctx context.Context, metrics model.ServerMetrics) error
 	CleanOldMetrics(ctx context.Context, threshold time.Time) error
-	SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error)
+	SelectLastMetrics(ctx context.Context, hostID int, count int) ([]model.Metric, error)
+	GetAllHosts(ctx context.Context) ([]model.Host, error)
 }
 
 type Service struct {
@@ -29,6 +30,10 @@ func (s *Service) CleanOldMetrics(ctx context.Context, threshold time.Time) erro
 	return s.storage.CleanOldMetrics(ctx, threshold)
 }
 
-func (s *Service) SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error) {
-	return s.storage.SelectLastMetrics(ctx, count)
+func (s *Service) SelectLastMetrics(ctx context.Context, hostID int, count int) ([]model.Metric, error) {
+	return s.storage.SelectLastMetrics(ctx, hostID, count)
+}
+
+func (s *Service) GetAllHosts(ctx context.Context) ([]model.Host, error) {
+	return s.storage.GetAllHosts(ctx)
 }

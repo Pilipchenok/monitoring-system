@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"time"
+	"strconv"
 
 	"monitoring-system/internal/model"
 )
@@ -12,7 +13,8 @@ import (
 type ServiceStorage interface {
 	SaveMetrics(ctx context.Context, metrics model.ServerMetrics) error
 	CleanOldMetrics(ctx context.Context, threshold time.Time) error
-	SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error)
+	SelectLastMetrics(ctx context.Context, hostID int, count int) ([]model.Metric, error)
+	GetAllHosts(ctx context.Context) ([]model.Host, error)
 }
 
 type Handler struct {
@@ -40,8 +42,19 @@ func (h *Handler) SaveMetricsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetMetricsHandler(w http.ResponseWriter, r *http.Request) {
-	countMetrics := 10
-	metrics, err := h.service.SelectLastMetrics(r.Context(), countMetrics)
+	hostIDStr := r.URL.Query().Get("host_id")
+	if hostIDStr == "" {
+		http.Error(w, "missing host_id parameter", http.StatusBadRequest)
+		return
+	}
+	hostID, err := strconv.Atoi(hostIDStr)
+	if err != nil {
+		http.Error(w, "invalid host_id parameter", http.StatusBadRequest)
+		return
+	}
+
+	countMetrics := 80
+	metrics, err := h.service.SelectLastMetrics(r.Context(), hostID, countMetrics)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		return
@@ -49,4 +62,19 @@ func (h *Handler) GetMetricsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metrics)
+}
+
+func (h *Handler) GetHostsHandler(w http.ResponseWriter, r *http.Request) {
+	hosts, err := h.service.GetAllHosts(r.Context())
+	if err != nil {
+		http.Error(w, "Failed to get hosts", http.StatusInternalServerError)
+		return
+	}
+
+	if hosts == nil {
+		hosts = []model.Host{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(hosts)
 }

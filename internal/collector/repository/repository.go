@@ -57,10 +57,10 @@ func (r *Repository) CleanOldMetrics(ctx context.Context, threshold time.Time) e
 	return err
 }
 
-func (r *Repository) SelectLastMetrics(ctx context.Context, count int) ([]model.Metric, error) {
-	reqSelect := `SELECT name, value FROM metrics ORDER BY recorded_at DESC LIMIT $1`
+func (r *Repository) SelectLastMetrics(ctx context.Context, hostID int, count int) ([]model.Metric, error) {
+	reqSelect := `SELECT name, value FROM metrics WHERE host_id = $1 ORDER BY recorded_at DESC LIMIT $2`
 
-	rows, err := r.db.QueryContext(ctx, reqSelect, count)
+	rows, err := r.db.QueryContext(ctx, reqSelect, hostID, count)
 	if err != nil {
 		return nil, err
 	}
@@ -82,4 +82,22 @@ func (r *Repository) SelectLastMetrics(ctx context.Context, count int) ([]model.
 	}
 
 	return metrics, nil
+}
+
+func (r *Repository) GetAllHosts(ctx context.Context) ([]model.Host, error) {
+	rows, err := r.db.QueryContext(ctx, "SELECT id, hostname FROM hosts ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var hosts []model.Host
+	for rows.Next() {
+		var h model.Host
+		if err := rows.Scan(&h.ID, &h.Hostname); err != nil {
+			return nil, err
+		}
+		hosts = append(hosts, h)
+	}
+	return hosts, nil
 }

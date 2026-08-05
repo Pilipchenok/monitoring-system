@@ -32,6 +32,7 @@ OS -> Agent (gopsutil) -> HTTP POST -> Collector -> PostgreSQL ->
 
 ## Структура проекта
 
+```text
 monitoring-system/
 ├── cmd/
 │   ├── agent/
@@ -55,6 +56,7 @@ monitoring-system/
 ├── docker-compose.yml
 ├── Makefile
 └── README.md
+```
 
 ## Конфигурация
 

@@ -326,21 +326,10 @@ button:disabled{cursor:not-allowed;opacity:.6}
 </footer>
 
 <script>
-/* =====================================================================
-   ИНТЕГРАЦИЯ С РЕАЛЬНЫМ API
-   GET /api/hosts                       -> [{ id, hostname, ... }]
-   GET /api/metrics/latest?host_id=<id> -> [{ Name, Value }, ...]
-   Метрики: cpu, ram, disk, activeconnections
-
-   АДАПТИВНОЕ ОКНО:
-   - истории больше, чем окно  -> показываем ровно последние N минут;
-   - истории меньше, чем окно  -> ось сжимается до фактических границ
-     данных (первая точка -> последняя), без пустого пространства.
-   ===================================================================== */
 
 const COLORS = {cyan:'#22d3ee', violet:'#a78bfa', amber:'#fbbf24', red:'#f87171', green:'#34d399'};
 const RANGE_MS = {'5м':5*60000, '15м':15*60000, '30м':30*60000};
-const MAX_POINTS = 900;   // 30 минут с шагом 2 с (буфер)
+const MAX_POINTS = 900;
 const POLL_MS = 2000;
 const LS_PREFIX = 'pulseMon.v1.';
 
@@ -350,11 +339,10 @@ let currentRange = '15м';
 let paused = false;
 let apiOnline = null;
 let lastSaveAt = 0;
-const buffers = {};       // buffers[hostId] = {t:[], cpu:[], ram:[], disk:[], conn:[]}
+const buffers = {};
 const eventsArr = [];
 const evThrottle = {};
 
-/* ================= Утилиты ================= */
 const fmtTime = d => d.toLocaleTimeString('ru-RU', {hour12:false});
 const fmtTick = v => fmtTime(new Date(v));
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
@@ -392,7 +380,6 @@ function gradFn(hex, a1, a2){
   };
 }
 
-/* ================= Chart.js (ось X — время) ================= */
 Chart.defaults.font.family = "'JetBrains Mono','Inter',monospace";
 Chart.defaults.color = '#5b6779';
 
@@ -443,7 +430,6 @@ const connectionsChart = new Chart(document.getElementById('connectionsChart'), 
   }
 });
 
-/* ================= Разбор ответа API ================= */
 function parseSnapshots(data){
   const snapshots = [];
   let cur = {};
@@ -458,7 +444,6 @@ function parseSnapshots(data){
   return snapshots;
 }
 
-/* ================= Буфер + localStorage ================= */
 function emptyBuffer(){ return {t:[], cpu:[], ram:[], disk:[], conn:[]}; }
 
 function pushSnap(b, t, s){
@@ -493,7 +478,7 @@ function mergeSnapshots(hostId, snaps){
   const lastT = b.t.length ? b.t[b.t.length-1] : 0;
   let appended = 0;
   snaps.forEach((s, i) => {
-    const t = now - (snaps.length - 1 - i) * POLL_MS; // меток времени в API нет — считаем шаг 2 с
+    const t = now - (snaps.length - 1 - i) * POLL_MS;
     if (t <= lastT) return;
     const li = b.t.length - 1;
     if (li >= 0 &&
@@ -506,7 +491,6 @@ function mergeSnapshots(hostId, snaps){
   return appended;
 }
 
-/* ================= API ================= */
 async function loadHosts(){
   try {
     const response = await fetch('/api/hosts');
@@ -536,7 +520,7 @@ async function fetchMetrics(hostId = currentHostId){
     setApiStatus(true);
 
     const snaps = parseSnapshots(data || []);
-    if (snaps.length) mergeSnapshots(hostId, snaps); // пустой ответ — буфер не трогаем
+    if (snaps.length) mergeSnapshots(hostId, snaps);
 
     if (String(hostId) === String(currentHostId)){
       renderAll();
@@ -550,7 +534,6 @@ async function fetchMetrics(hostId = currentHostId){
   }
 }
 
-/* ================= Вкладки ================= */
 function renderTabs(){
   const wrap = document.getElementById('serverTabs');
   wrap.innerHTML = '';
@@ -576,7 +559,6 @@ async function selectHost(id){
   renderAll();
 }
 
-/* ================= Отрисовка ================= */
 function renderAll(){
   refreshCharts();
   refreshKpis();
@@ -609,9 +591,6 @@ function refreshCharts(){
   document.getElementById('mainEmpty').style.display = has ? 'none' : 'grid';
   document.getElementById('netEmpty').style.display = has ? 'none' : 'grid';
 
-  // Адаптивные границы оси X:
-  //  - данных больше окна  -> [последняя - окно, последняя]
-  //  - данных меньше окна  -> [первая, последняя] (без пустоты)
   const now = Date.now();
   let minT = now - RANGE_MS[currentRange];
   let maxT = now;
@@ -756,7 +735,6 @@ function renderSnapTable(){
   document.getElementById('snapCount').textContent = b.t.length + ' точек';
 }
 
-/* ================= События ================= */
 function pushEvent(sev, text, srv){
   eventsArr.unshift({sev, text, srv, time:fmtTime(new Date())});
   if (eventsArr.length > 30) eventsArr.pop();
@@ -805,13 +783,12 @@ function setApiStatus(ok){
   }
 }
 
-/* ================= Управление ================= */
 document.getElementById('rangeSeg').addEventListener('click', e=>{
   const btn = e.target.closest('button[data-range]');
   if (!btn) return;
   currentRange = btn.dataset.range;
   document.querySelectorAll('#rangeSeg button').forEach(b=>b.classList.toggle('active', b===btn));
-  refreshCharts();      // ось X пересчитается сразу по новым границам
+  refreshCharts();
   updateRangePill();
 });
 
@@ -831,7 +808,6 @@ document.getElementById('pauseBtn').addEventListener('click', ()=>{
   pushEvent('info', paused ? 'Опрос метрик приостановлен' : 'Опрос метрик возобновлён', 'UI');
 });
 
-/* ================= Циклы ================= */
 setInterval(()=>{
   if (paused || !currentHostId) return;
   fetchMetrics();
@@ -844,7 +820,6 @@ setInterval(()=>{
     now.toLocaleDateString('ru-RU', {weekday:'short', day:'numeric', month:'short'});
 }, 1000);
 
-// сохраняем историю при уходе со страницы
 window.addEventListener('pagehide', ()=>{ if (currentHostId && buffers[currentHostId]) storeBuffer(currentHostId); });
 
 let resizeTimer;
@@ -853,7 +828,6 @@ window.addEventListener('resize', ()=>{
   resizeTimer = setTimeout(()=>refreshKpis(), 150);
 });
 
-/* ================= Старт ================= */
 pushEvent('info', 'Мониторинг запущен, подключение к API…', 'Система');
 loadHosts();
 </script>

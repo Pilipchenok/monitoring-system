@@ -114,10 +114,7 @@ button:disabled{cursor:not-allowed;opacity:.6}
 
 .chart-wrap{position:relative;height:285px}
 .chart-wrap.sm{height:225px}
-.chart-empty{
-  position:absolute;inset:0;display:none;place-items:center;color:var(--dim);
-  font-size:12.5px;text-align:center;z-index:2;pointer-events:none;
-}
+.chart-empty{position:absolute;inset:0;display:none;place-items:center;color:var(--dim);font-size:12.5px;text-align:center;z-index:2;pointer-events:none}
 
 .health-body{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
 .gauge{position:relative;width:118px;height:118px;flex-shrink:0}
@@ -258,7 +255,7 @@ button:disabled{cursor:not-allowed;opacity:.6}
     <div class="panel-head">
       <div>
         <h3>Загрузка ресурсов</h3>
-        <div class="sub">CPU · ОЗУ · Дисковая подсистема, % · опрос /api/metrics каждые 2 с</div>
+        <div class="sub">CPU · ОЗУ · Диск, %</div>
       </div>
       <span class="pill ok" id="chartRangePill">окно: 15м</span>
     </div>
@@ -329,27 +326,50 @@ button:disabled{cursor:not-allowed;opacity:.6}
 </footer>
 
 <script>
+/* =====================================================================
+   ИНТЕГРАЦИЯ С РЕАЛЬНЫМ API
+   GET /api/hosts                       -> [{ id, hostname, ... }]
+   GET /api/metrics/latest?host_id=<id> -> [{ Name, Value }, ...]
+   Метрики: cpu, ram, disk, activeconnections
+
+   АДАПТИВНОЕ ОКНО:
+   - истории больше, чем окно  -> показываем ровно последние N минут;
+   - истории меньше, чем окно  -> ось сжимается до фактических границ
+     данных (первая точка -> последняя), без пустого пространства.
+   ===================================================================== */
 
 const COLORS = {cyan:'#22d3ee', violet:'#a78bfa', amber:'#fbbf24', red:'#f87171', green:'#34d399'};
-const RANGE_POINTS = {'5м':150, '15м':450, '30м':900};
-const MAX_POINTS = 900;
-const SEED_POINTS  = 20;
+const RANGE_MS = {'5м':5*60000, '15м':15*60000, '30м':30*60000};
+const MAX_POINTS = 900;   // 30 минут с шагом 2 с (буфер)
 const POLL_MS = 2000;
+const LS_PREFIX = 'pulseMon.v1.';
 
 let hosts = [];
 let currentHostId = null;
 let currentRange = '15м';
 let paused = false;
 let apiOnline = null;
-const buffers = {};
+let lastSaveAt = 0;
+const buffers = {};       // buffers[hostId] = {t:[], cpu:[], ram:[], disk:[], conn:[]}
 const eventsArr = [];
 const evThrottle = {};
 
+/* ================= Утилиты ================= */
 const fmtTime = d => d.toLocaleTimeString('ru-RU', {hour12:false});
+const fmtTick = v => fmtTime(new Date(v));
 const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const currentHost = () => hosts.find(h => String(h.id) === String(currentHostId)) || null;
 const hostLabel = () => currentHost()?.hostname || ('ID ' + currentHostId);
+
+function fmtSpan(b){
+  if (!b || b.t.length < 2) return '0с';
+  const s = Math.round((b.t[b.t.length-1] - b.t[0]) / 1000);
+  if (s < 60) return s + 'с';
+  const m = Math.floor(s/60);
+  if (m < 60) return m + 'м';
+  return Math.floor(m/60) + 'ч ' + (m%60) + 'м';
+}
 
 function statusOf(v, warnT, critT){
   if (v >= critT) return {cls:'crit', txt:'критично'};
@@ -372,64 +392,58 @@ function gradFn(hex, a1, a2){
   };
 }
 
+/* ================= Chart.js (ось X — время) ================= */
 Chart.defaults.font.family = "'JetBrains Mono','Inter',monospace";
 Chart.defaults.color = '#5b6779';
 
-const commonOptions = {
-  animation: false,
-  responsive: true,
-  maintainAspectRatio: false,
-  elements: { point: { radius: 0, hitRadius: 8 } },
-  interaction: { mode: 'index', intersect: false },
-  plugins: {
-    tooltip: {
-      backgroundColor:'#0b1017', borderColor:'#28374f', borderWidth:1,
-      titleColor:'#e8eef6', bodyColor:'#9aa7ba', padding:10, cornerRadius:8,
-      usePointStyle:true, boxWidth:7, boxHeight:7, titleFont:{size:11}, bodyFont:{size:11}
-    }
-  }
+const timeAxis = () => ({
+  type:'linear',
+  grid:{color:'rgba(134,148,168,.05)'},
+  ticks:{ font:{size:10}, maxTicksLimit:8, maxRotation:0, callback:fmtTick }
+});
+
+const tooltipBase = {
+  backgroundColor:'#0b1017', borderColor:'#28374f', borderWidth:1,
+  titleColor:'#e8eef6', bodyColor:'#9aa7ba', padding:10, cornerRadius:8,
+  usePointStyle:true, boxWidth:7, boxHeight:7, titleFont:{size:11}, bodyFont:{size:11},
+  callbacks:{ title: items => items.length ? fmtTick(items[0].parsed.x) : '' }
 };
 
 const resourcesChart = new Chart(document.getElementById('resourcesChart'), {
   type:'line',
-  data:{ labels:[], datasets:[
-    { label:'CPU (%)',  data:[], borderColor:COLORS.cyan,   backgroundColor:gradFn(COLORS.cyan,.26),   fill:true, tension:.3, borderWidth:2 },
-    { label:'RAM (%)',  data:[], borderColor:COLORS.violet, backgroundColor:gradFn(COLORS.violet,.14), fill:true, tension:.3, borderWidth:2 },
-    { label:'DISK (%)', data:[], borderColor:COLORS.amber,  fill:false, tension:.3, borderWidth:1.6, borderDash:[6,4] }
+  data:{ datasets:[
+    { label:'CPU (%)',  data:[], borderColor:COLORS.cyan,   backgroundColor:gradFn(COLORS.cyan,.26),   fill:true, tension:.3, borderWidth:2, pointRadius:0, pointHitRadius:8 },
+    { label:'RAM (%)',  data:[], borderColor:COLORS.violet, backgroundColor:gradFn(COLORS.violet,.14), fill:true, tension:.3, borderWidth:2, pointRadius:0, pointHitRadius:8 },
+    { label:'DISK (%)', data:[], borderColor:COLORS.amber,  fill:false, tension:.3, borderWidth:1.6, borderDash:[6,4], pointRadius:0, pointHitRadius:8 }
   ]},
   options:{
-    ...commonOptions,
-    scales:{
-      x:{ grid:{color:'rgba(134,148,168,.05)'}, ticks:{font:{size:10}, maxTicksLimit:8, maxRotation:0} },
-      y:{ beginAtZero:true, grid:{color:'rgba(134,148,168,.08)'}, ticks:{font:{size:10}, stepSize:25, callback:v=>v+'%'} }
-    },
+    animation:false, responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    scales:{ x:timeAxis(), y:{beginAtZero:true, grid:{color:'rgba(134,148,168,.08)'}, ticks:{font:{size:10}, stepSize:25, callback:v=>v+'%'}} },
     plugins:{
-      ...commonOptions.plugins,
-      legend:{ labels:{color:'#8694a8', usePointStyle:true, pointStyle:'circle', boxWidth:6, boxHeight:6, padding:16, font:{size:11, family:"'Inter',sans-serif"}} },
-      tooltip:{ ...commonOptions.plugins.tooltip, callbacks:{ label:c=>` ${c.dataset.label}: ${(+c.parsed.y).toFixed(1)}` } }
+      legend:{labels:{color:'#8694a8', usePointStyle:true, pointStyle:'circle', boxWidth:6, boxHeight:6, padding:16, font:{size:11, family:"'Inter',sans-serif"}}},
+      tooltip:{...tooltipBase, callbacks:{...tooltipBase.callbacks, label:c=>` ${c.dataset.label}: ${(+c.parsed.y).toFixed(1)}`}}
     }
   }
 });
 
 const connectionsChart = new Chart(document.getElementById('connectionsChart'), {
   type:'line',
-  data:{ labels:[], datasets:[
-    { label:'Active Connections', data:[], borderColor:COLORS.green, backgroundColor:gradFn(COLORS.green,.25), fill:true, tension:.3, borderWidth:2 }
+  data:{ datasets:[
+    { label:'Active Connections', data:[], borderColor:COLORS.green, backgroundColor:gradFn(COLORS.green,.25), fill:true, tension:.3, borderWidth:2, pointRadius:0, pointHitRadius:8 }
   ]},
   options:{
-    ...commonOptions,
-    scales:{
-      x:{ grid:{display:false}, ticks:{font:{size:10}, maxTicksLimit:8, maxRotation:0} },
-      y:{ beginAtZero:true, grid:{color:'rgba(134,148,168,.08)'}, ticks:{font:{size:10}, precision:0, maxTicksLimit:5} }
-    },
+    animation:false, responsive:true, maintainAspectRatio:false,
+    interaction:{mode:'index', intersect:false},
+    scales:{ x:{...timeAxis(), grid:{display:false}}, y:{beginAtZero:true, grid:{color:'rgba(134,148,168,.08)'}, ticks:{font:{size:10}, precision:0, maxTicksLimit:5}} },
     plugins:{
-      ...commonOptions.plugins,
       legend:{display:false},
-      tooltip:{ ...commonOptions.plugins.tooltip, callbacks:{ label:c=>` ${c.dataset.label}: ${Math.round(c.parsed.y)}` } }
+      tooltip:{...tooltipBase, callbacks:{...tooltipBase.callbacks, label:c=>` ${c.dataset.label}: ${Math.round(c.parsed.y)}`}}
     }
   }
 });
 
+/* ================= Разбор ответа API ================= */
 function parseSnapshots(data){
   const snapshots = [];
   let cur = {};
@@ -441,44 +455,58 @@ function parseSnapshots(data){
     cur[name] = value;
   });
   if (Object.keys(cur).length > 0) snapshots.push(cur);
-  return snapshots.slice(0, SEED_POINTS).reverse();
+  return snapshots;
 }
 
-function emptyBuffer(){ return {labels:[], cpu:[], ram:[], disk:[], conn:[]}; }
+/* ================= Буфер + localStorage ================= */
+function emptyBuffer(){ return {t:[], cpu:[], ram:[], disk:[], conn:[]}; }
 
-function pushSnap(b, label, s){
-  b.labels.push(label);
+function pushSnap(b, t, s){
+  b.t.push(t);
   b.cpu.push(s.cpu || 0);
   b.ram.push(s.ram || 0);
   b.disk.push(s.disk || 0);
   b.conn.push(s.activeconnections || 0);
-  if (b.cpu.length > MAX_POINTS){
-    b.labels.shift(); b.cpu.shift(); b.ram.shift(); b.disk.shift(); b.conn.shift();
-  }
+  if (b.t.length > MAX_POINTS){ b.t.shift(); b.cpu.shift(); b.ram.shift(); b.disk.shift(); b.conn.shift(); }
 }
 
-function seedBuffer(hostId, snaps){
-  const b = emptyBuffer();
+function storeBuffer(hostId){
+  try { localStorage.setItem(LS_PREFIX + hostId, JSON.stringify(buffers[hostId])); } catch(e){}
+}
+
+function loadStored(hostId){
+  try {
+    const raw = localStorage.getItem(LS_PREFIX + hostId);
+    if (!raw) return null;
+    const b = JSON.parse(raw);
+    if (!b || !Array.isArray(b.t) || !b.t.length) return null;
+    const cut = Date.now() - 30*60000;
+    while (b.t.length && b.t[0] < cut){ b.t.shift(); b.cpu.shift(); b.ram.shift(); b.disk.shift(); b.conn.shift(); }
+    return b.t.length ? b : null;
+  } catch(e){ return null; }
+}
+
+function mergeSnapshots(hostId, snaps){
+  if (!buffers[hostId]) buffers[hostId] = loadStored(hostId) || emptyBuffer();
+  const b = buffers[hostId];
   const now = Date.now();
+  const lastT = b.t.length ? b.t[b.t.length-1] : 0;
+  let appended = 0;
   snaps.forEach((s, i) => {
-    const secondsAgo = (snaps.length - 1 - i) * 2;
-    pushSnap(b, fmtTime(new Date(now - secondsAgo * 1000)), s);
+    const t = now - (snaps.length - 1 - i) * POLL_MS; // меток времени в API нет — считаем шаг 2 с
+    if (t <= lastT) return;
+    const li = b.t.length - 1;
+    if (li >= 0 &&
+        b.cpu[li] === (s.cpu||0) && b.ram[li] === (s.ram||0) &&
+        b.disk[li] === (s.disk||0) && b.conn[li] === (s.activeconnections||0)) return;
+    pushSnap(b, t, s);
+    appended++;
   });
-  buffers[hostId] = b;
+  if (appended && now - lastSaveAt > 10000){ storeBuffer(hostId); lastSaveAt = now; }
+  return appended;
 }
 
-function appendSnapshot(hostId, snap){
-  const b = buffers[hostId] || (buffers[hostId] = emptyBuffer());
-  const last = b.cpu.length - 1;
-  if (last >= 0 &&
-      b.cpu[last] === (snap.cpu||0) && b.ram[last] === (snap.ram||0) &&
-      b.disk[last] === (snap.disk||0) && b.conn[last] === (snap.activeconnections||0)){
-    return false;
-  }
-  pushSnap(b, fmtTime(new Date()), snap);
-  return true;
-}
-
+/* ================= API ================= */
 async function loadHosts(){
   try {
     const response = await fetch('/api/hosts');
@@ -487,11 +515,7 @@ async function loadHosts(){
     hosts = Array.isArray(data) ? data : [];
     renderTabs();
     setApiStatus(true);
-
-    if (!hosts.length){
-      pushEvent('warn', 'Нет подключенных серверов', 'API');
-      return;
-    }
+    if (!hosts.length){ pushEvent('warn', 'Нет подключенных серверов', 'API'); return; }
     pushEvent('ok', `Список хостов загружен (${hosts.length})`, 'API');
     await selectHost(hosts[0].id);
   } catch (error) {
@@ -512,13 +536,7 @@ async function fetchMetrics(hostId = currentHostId){
     setApiStatus(true);
 
     const snaps = parseSnapshots(data || []);
-    if (!snaps.length) return;
-
-    if (!buffers[hostId] || buffers[hostId].cpu.length === 0){
-      seedBuffer(hostId, snaps);
-    } else {
-      appendSnapshot(hostId, snaps[snaps.length - 1]);
-    }
+    if (snaps.length) mergeSnapshots(hostId, snaps); // пустой ответ — буфер не трогаем
 
     if (String(hostId) === String(currentHostId)){
       renderAll();
@@ -532,6 +550,7 @@ async function fetchMetrics(hostId = currentHostId){
   }
 }
 
+/* ================= Вкладки ================= */
 function renderTabs(){
   const wrap = document.getElementById('serverTabs');
   wrap.innerHTML = '';
@@ -552,39 +571,82 @@ async function selectHost(id){
   currentHostId = id;
   document.querySelectorAll('#serverTabs button').forEach(b =>
     b.classList.toggle('active', String(b.dataset.id) === String(id)));
-  if (!buffers[id] || buffers[id].cpu.length === 0) await fetchMetrics(id);
+  if (!buffers[id]) buffers[id] = loadStored(id) || emptyBuffer();
+  await fetchMetrics(id);
   renderAll();
 }
 
+/* ================= Отрисовка ================= */
 function renderAll(){
   refreshCharts();
   refreshKpis();
   refreshHealth();
   renderSnapTable();
   refreshFacts();
+  updateRangePill();
+}
+
+function updateRangePill(){
+  const b = buffers[currentHostId];
+  document.getElementById('chartRangePill').textContent =
+    `окно: ${currentRange} · данных: ${b ? fmtSpan(b) : '0с'}`;
+}
+
+function windowPoints(b, minT){
+  const out = {t:[], cpu:[], ram:[], disk:[], conn:[]};
+  for (let i = 0; i < b.t.length; i++){
+    if (b.t[i] >= minT){
+      out.t.push(b.t[i]); out.cpu.push(b.cpu[i]); out.ram.push(b.ram[i]);
+      out.disk.push(b.disk[i]); out.conn.push(b.conn[i]);
+    }
+  }
+  return out;
 }
 
 function refreshCharts(){
   const b = buffers[currentHostId];
-  const has = b && b.cpu.length > 0;
+  const has = b && b.t.length > 0;
   document.getElementById('mainEmpty').style.display = has ? 'none' : 'grid';
   document.getElementById('netEmpty').style.display = has ? 'none' : 'grid';
-  if (!has){
-    resourcesChart.data.labels = []; resourcesChart.data.datasets.forEach(ds => ds.data = []);
-    connectionsChart.data.labels = []; connectionsChart.data.datasets[0].data = [];
-    resourcesChart.update(); connectionsChart.update();
-    return;
+
+  // Адаптивные границы оси X:
+  //  - данных больше окна  -> [последняя - окно, последняя]
+  //  - данных меньше окна  -> [первая, последняя] (без пустоты)
+  const now = Date.now();
+  let minT = now - RANGE_MS[currentRange];
+  let maxT = now;
+  if (has){
+    const firstT = b.t[0];
+    const lastT  = b.t[b.t.length-1];
+    maxT = lastT;
+    minT = Math.max(firstT, lastT - RANGE_MS[currentRange]);
   }
-  const n = RANGE_POINTS[currentRange];
-  const sl = a => a.slice(Math.max(0, a.length - n));
-  resourcesChart.data.labels = sl(b.labels);
-  resourcesChart.data.datasets[0].data = sl(b.cpu);
-  resourcesChart.data.datasets[1].data = sl(b.ram);
-  resourcesChart.data.datasets[2].data = sl(b.disk);
+
+  resourcesChart.options.scales.x.min = minT;
+  resourcesChart.options.scales.x.max = maxT;
+  connectionsChart.options.scales.x.min = minT;
+  connectionsChart.options.scales.x.max = maxT;
+
+  if (!has){
+    resourcesChart.data.datasets.forEach(ds => ds.data = []);
+    connectionsChart.data.datasets[0].data = [];
+  } else {
+    const w = windowPoints(b, minT);
+    const toXY = arr => w.t.map((t,i) => ({x:t, y:arr[i]}));
+    resourcesChart.data.datasets[0].data = toXY(w.cpu);
+    resourcesChart.data.datasets[1].data = toXY(w.ram);
+    resourcesChart.data.datasets[2].data = toXY(w.disk);
+    connectionsChart.data.datasets[0].data = toXY(w.conn);
+  }
   resourcesChart.update();
-  connectionsChart.data.labels = sl(b.labels);
-  connectionsChart.data.datasets[0].data = sl(b.conn);
   connectionsChart.update();
+}
+
+function idxAgo(b, ms){
+  const target = b.t[b.t.length-1] - ms;
+  let j = b.t.length - 1;
+  while (j > 0 && b.t[j] > target) j--;
+  return j;
 }
 
 function setKpi(key, val, dec, delta, deltaUnit, barPct, warnT, critT){
@@ -602,16 +664,17 @@ function setKpi(key, val, dec, delta, deltaUnit, barPct, warnT, critT){
 
 function refreshKpis(){
   const b = buffers[currentHostId];
-  if (!b || !b.cpu.length) return;
+  if (!b || !b.t.length) return;
   const last = k => b[k][b[k].length-1];
-  const back = Math.min(150, b.cpu.length - 1);
-  const ago = k => b[k][b[k].length - 1 - back];
+  const hasDelta = b.t.length > 1;
+  const j = hasDelta ? idxAgo(b, 300000) : 0;
+  const delta = k => hasDelta && j < b[k].length-1 ? last(k) - b[k][j] : null;
   const connMax = Math.max(100, ...b.conn);
 
-  setKpi('cpu',  last('cpu'),  true,  back ? last('cpu')-ago('cpu')   : null, '%', last('cpu'), 65, 85);
-  setKpi('ram',  last('ram'),  true,  back ? last('ram')-ago('ram')   : null, '%', last('ram'), 75, 90);
-  setKpi('disk', last('disk'), true,  back ? last('disk')-ago('disk') : null, '%', last('disk'), 70, 85);
-  setKpi('net',  last('conn'), false, back ? last('conn')-ago('conn') : null, '',  last('conn')/connMax*100, connMax*0.75, connMax*0.9);
+  setKpi('cpu',  last('cpu'),  true,  delta('cpu'),  '%', last('cpu'), 65, 85);
+  setKpi('ram',  last('ram'),  true,  delta('ram'),  '%', last('ram'), 75, 90);
+  setKpi('disk', last('disk'), true,  delta('disk'), '%', last('disk'), 70, 85);
+  setKpi('net',  last('conn'), false, delta('conn'), '',  last('conn')/connMax*100, connMax*0.75, connMax*0.9);
 
   drawSpark(document.getElementById('s-cpu'),  b.cpu.slice(-40),  COLORS.cyan);
   drawSpark(document.getElementById('s-ram'),  b.ram.slice(-40),  COLORS.violet);
@@ -648,8 +711,8 @@ function refreshHealth(){
   const h = currentHost();
   document.getElementById('f-host').textContent = h ? h.hostname : '—';
   document.getElementById('f-id').textContent = h ? h.id : '—';
-  document.getElementById('f-points').textContent = b ? b.cpu.length : 0;
-  if (!b || !b.cpu.length){ return; }
+  document.getElementById('f-points').textContent = b ? b.t.length : 0;
+  if (!b || !b.t.length) return;
   const cpu = b.cpu.at(-1), ram = b.ram.at(-1), dsk = b.disk.at(-1), conn = b.conn.at(-1);
   let s = 100;
   s -= Math.max(0, cpu-70)*0.9;
@@ -666,23 +729,23 @@ function refreshHealth(){
 
 function refreshFacts(){
   const b = buffers[currentHostId];
-  if (b && b.labels.length) document.getElementById('f-upd').textContent = b.labels.at(-1);
+  if (b && b.t.length) document.getElementById('f-upd').textContent = fmtTime(new Date(b.t.at(-1)));
 }
 
 function renderSnapTable(){
   const b = buffers[currentHostId];
   const body = document.getElementById('snapBody');
-  if (!b || !b.cpu.length){
+  if (!b || !b.t.length){
     body.innerHTML = '<tr><td colspan="5" style="color:var(--dim)">нет данных</td></tr>';
     document.getElementById('snapCount').textContent = '0 точек';
     return;
   }
   const rows = [];
-  const n = Math.min(6, b.cpu.length);
-  for (let i = b.cpu.length - 1; i >= b.cpu.length - n; i--){
+  const n = Math.min(6, b.t.length);
+  for (let i = b.t.length - 1; i >= b.t.length - n; i--){
     const cls = v => v >= 85 ? 'hi' : v >= 65 ? 'mid' : 'lo';
     rows.push(`<tr>
-      <td>${b.labels[i]}</td>
+      <td>${fmtTime(new Date(b.t[i]))}</td>
       <td class="${cls(b.cpu[i])}">${b.cpu[i].toFixed(1)}</td>
       <td class="${cls(b.ram[i])}">${b.ram[i].toFixed(1)}</td>
       <td class="${cls(b.disk[i])}">${b.disk[i].toFixed(1)}</td>
@@ -690,9 +753,10 @@ function renderSnapTable(){
     </tr>`);
   }
   body.innerHTML = rows.join('');
-  document.getElementById('snapCount').textContent = b.cpu.length + ' точек';
+  document.getElementById('snapCount').textContent = b.t.length + ' точек';
 }
 
+/* ================= События ================= */
 function pushEvent(sev, text, srv){
   eventsArr.unshift({sev, text, srv, time:fmtTime(new Date())});
   if (eventsArr.length > 30) eventsArr.pop();
@@ -715,10 +779,9 @@ function renderEvents(){
     </div>`).join('');
   document.getElementById('evCount').textContent = eventsArr.length;
 }
-
 function maybeEvents(){
   const b = buffers[currentHostId];
-  if (!b || !b.cpu.length) return;
+  if (!b || !b.t.length) return;
   const cpu = b.cpu.at(-1), ram = b.ram.at(-1), name = hostLabel();
   if (cpu > 90) throttledEvent('cpu-crit-'+currentHostId, 'crit', `Критическая нагрузка CPU (${cpu.toFixed(0)}%)`, name);
   else if (cpu > 85) throttledEvent('cpu-warn-'+currentHostId, 'warn', `Высокая нагрузка CPU (${cpu.toFixed(0)}%)`, name);
@@ -742,13 +805,14 @@ function setApiStatus(ok){
   }
 }
 
+/* ================= Управление ================= */
 document.getElementById('rangeSeg').addEventListener('click', e=>{
   const btn = e.target.closest('button[data-range]');
   if (!btn) return;
   currentRange = btn.dataset.range;
   document.querySelectorAll('#rangeSeg button').forEach(b=>b.classList.toggle('active', b===btn));
-  document.getElementById('chartRangePill').textContent = 'окно: ' + currentRange;
-  refreshCharts();
+  refreshCharts();      // ось X пересчитается сразу по новым границам
+  updateRangePill();
 });
 
 document.getElementById('pauseBtn').addEventListener('click', ()=>{
@@ -757,16 +821,17 @@ document.getElementById('pauseBtn').addEventListener('click', ()=>{
   document.getElementById('pauseIco').innerHTML = paused
     ? '<path d="M8 5v14l11-7z"/>'
     : '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>';
-  if (!paused && apiOnline !== false){
-    document.getElementById('liveBadge').className = 'live-badge';
-    document.getElementById('liveText').textContent = 'LIVE';
-  } else if (paused){
+  if (paused){
     document.getElementById('liveBadge').className = 'live-badge paused';
     document.getElementById('liveText').textContent = 'ПАУЗА';
+  } else if (apiOnline !== false){
+    document.getElementById('liveBadge').className = 'live-badge';
+    document.getElementById('liveText').textContent = 'LIVE';
   }
   pushEvent('info', paused ? 'Опрос метрик приостановлен' : 'Опрос метрик возобновлён', 'UI');
 });
 
+/* ================= Циклы ================= */
 setInterval(()=>{
   if (paused || !currentHostId) return;
   fetchMetrics();
@@ -779,12 +844,16 @@ setInterval(()=>{
     now.toLocaleDateString('ru-RU', {weekday:'short', day:'numeric', month:'short'});
 }, 1000);
 
+// сохраняем историю при уходе со страницы
+window.addEventListener('pagehide', ()=>{ if (currentHostId && buffers[currentHostId]) storeBuffer(currentHostId); });
+
 let resizeTimer;
 window.addEventListener('resize', ()=>{
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(()=>refreshKpis(), 150);
 });
 
+/* ================= Старт ================= */
 pushEvent('info', 'Мониторинг запущен, подключение к API…', 'Система');
 loadHosts();
 </script>
